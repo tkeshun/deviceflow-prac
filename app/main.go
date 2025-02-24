@@ -8,12 +8,13 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 )
 
 const (
-	clientID        = "YOUR_CLIENT_ID" // GitHub AppのClient ID
+	// clientID        = "" // GitHub AppのClient ID
 	deviceAuthURL   = "https://github.com/login/device/code"
 	accessTokenURL  = "https://github.com/login/oauth/access_token"
 	githubUserURL   = "https://api.github.com/user"
@@ -37,7 +38,10 @@ type accessTokenResponse struct {
 	Error       string `json:"error,omitempty"`
 }
 
+var clientID string
+
 func main() {
+	clientID = os.Getenv("CLIENT_ID")
 
 	// 1. デバイスコードを取得
 	deviceCodeRes, err := requestDeviceFlow()
@@ -64,13 +68,13 @@ loop:
 				log.Fatal(err)
 			}
 			if accessTokenRes.AccessToken != "" {
+				accessTokenResponse = *accessTokenRes
 				break loop
 			}
 
 			switch accessTokenRes.Error {
 			case "authorization_pending":
 				fmt.Println("ユーザー認証待ち")
-				continue
 			case "slow_down":
 				fmt.Println("ポーリング感覚短すぎ")
 			case "access_denied":
@@ -81,10 +85,12 @@ loop:
 				log.Fatal(accessTokenResponse.Error)
 			}
 			// time.Sleep(pollingInterval)
-			time.Sleep(time.Duration(deviceCodeRes.Interval) * time.Second)
 		}
-
+		// time.Sleep(time.Duration(deviceCodeRes.Interval) * time.Second)
+		time.Sleep(pollingInterval)
 	}
+
+	fmt.Println(accessTokenResponse)
 
 	userInfo, err := getGitHubUserInfo(accessTokenResponse.AccessToken)
 	if err != nil {
@@ -124,19 +130,29 @@ func requestDeviceFlow() (*deviceCodeResponse, error) {
 }
 
 func requestAccessToken(deviceCode string) (*accessTokenResponse, error) {
+	client := &http.Client{}
+
 	data := url.Values{}
 	data.Set("client_id", clientID)
 	data.Set("device_code", deviceCode)
 	data.Set("grant_type", "urn:ietf:params:oauth:grant-type:device_code")
 
-	resp, err := http.PostForm(accessTokenURL, data)
+	req, err := http.NewRequest("POST", accessTokenURL, strings.NewReader(data.Encode()))
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	tokenResp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer tokenResp.Body.Close()
 
 	var tokenRes accessTokenResponse
-	err = json.NewDecoder(resp.Body).Decode(&tokenRes)
+	err = json.NewDecoder(tokenResp.Body).Decode(&tokenRes)
 	if err != nil {
 		return nil, err
 	}
